@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
@@ -59,21 +59,42 @@ def build_trim_command(
     end_seconds: Optional[float],
     smart: bool = False,
 ) -> List[str]:
-    command: List[str] = [
-        "ffmpeg",
-        "-hide_banner",
-        "-y",
-    ]
+    duration: Optional[float] = None
+    if start_seconds is not None and end_seconds is not None and end_seconds > start_seconds:
+        duration = end_seconds - start_seconds
+
+    if smart:
+        command: List[str] = ["ffmpeg", "-hide_banner", "-y", "-i", str(input_path)]
+        if start_seconds is not None:
+            command += ["-ss", f"{start_seconds:.3f}"]
+        if duration is not None:
+            command += ["-t", f"{duration:.3f}"]
+        elif end_seconds is not None:
+            command += ["-to", f"{end_seconds:.3f}"]
+        command += [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-c:a",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+        return command
+
+    command = ["ffmpeg", "-hide_banner", "-y"]
     if start_seconds is not None:
         command += ["-ss", f"{start_seconds:.3f}"]
-    if end_seconds is not None:
-        command += ["-to", f"{end_seconds:.3f}"]
     command += ["-i", str(input_path)]
-    if smart:
-        command += ["-c:v", "copy", "-c:a", "copy"]
-    else:
-        command += ["-c", "copy"]
-    command.append(str(output_path))
+    if duration is not None:
+        command += ["-t", f"{duration:.3f}"]
+    elif end_seconds is not None:
+        command += ["-to", f"{end_seconds:.3f}"]
+    command += ["-c", "copy", "-avoid_negative_ts", "make_zero", str(output_path)]
     return command
 
 
@@ -106,4 +127,3 @@ def build_thumbnail_command(
         command += ["-vf", f"select='eq(n,{frame_number})'", "-vsync", "0"]
     command += ["-frames:v", "1", str(output_path)]
     return command
-

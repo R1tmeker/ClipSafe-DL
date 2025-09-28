@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -119,4 +119,5 @@ class Job:
         if error is not None:
             self.error = error
         self.updated_at = datetime.utcnow()
+
 

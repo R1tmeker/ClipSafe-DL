@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 import os
@@ -71,9 +71,13 @@ class Settings:
     webhook_url: Optional[str] = None
     s3_endpoint: Optional[str] = None
     s3_bucket: Optional[str] = None
+    s3_region: Optional[str] = None
     s3_access_key: Optional[str] = None
     s3_secret_key: Optional[str] = None
+    s3_public_base: Optional[str] = None
     enable_analytics: bool = False
+    database_url: Optional[str] = None
+    prometheus_port: int = 8001
 
     def ensure_runtime_dirs(self) -> None:
         self.storage_root.mkdir(parents=True, exist_ok=True)
@@ -103,14 +107,18 @@ def load_settings() -> Settings:
         jobs_per_hour=_as_int("JOBS_PER_HOUR", 5),
         allowed_domains=_split_list("ALLOWED_DOMAINS"),
         storage_root=_path("STORAGE_ROOT", "./data"),
-        temp_root=_path("TEMP_ROOT", "./data/tmp"),
+        temp_root=_path("TEMP_ROOT", "./data/temp"),
         public_base_url=_env("PUBLIC_BASE_URL"),
         webhook_url=_env("WEBHOOK_URL"),
         s3_endpoint=_env("S3_ENDPOINT"),
         s3_bucket=_env("S3_BUCKET"),
+        s3_region=_env("S3_REGION"),
         s3_access_key=_env("S3_ACCESS_KEY"),
         s3_secret_key=_env("S3_SECRET_KEY"),
+        s3_public_base=_env("S3_PUBLIC_BASE"),
         enable_analytics=_as_bool("ENABLE_ANALYTICS", False),
+        database_url=_env("DATABASE_URL"),
+        prometheus_port=_as_int("PROMETHEUS_PORT", 8001),
     )
     settings.ensure_runtime_dirs()
     return settings

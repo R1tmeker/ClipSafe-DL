@@ -1,17 +1,24 @@
 ﻿from __future__ import annotations
 
 import logging
+from typing import Optional
 
 from aiogram import Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .config import Settings
 from .jobs import JobQueue
 from .models import Job, JobType
+from .states import RightsStates
 from .texts import (
     HELP_MESSAGE,
+    MP4_INCOMPATIBLE_MESSAGE,
+    RIGHTS_CONFIRMED_MESSAGE,
+    RIGHTS_DECLINED_MESSAGE,
+    RIGHTS_PROMPT_MESSAGE,
     START_MESSAGE,
     YTDL_REFUSAL_MESSAGE,
 )
@@ -26,6 +33,8 @@ OPERATIONS_KEYBOARD = (
     ("Аудио", "op:audio"),
     ("Превью", "op:preview"),
 )
+
+RIGHTS_CALLBACK_PREFIX = "rights"
 
 
 def _get_settings(message: Message) -> Settings:
@@ -42,6 +51,34 @@ def _build_operations_keyboard() -> InlineKeyboardMarkup:
         builder.button(text=title, callback_data=payload)
     builder.adjust(1, 2, 2)
     return builder.as_markup()
+
+
+def _build_rights_keyboard(job_id: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Да, у меня есть права", callback_data=f"{RIGHTS_CALLBACK_PREFIX}:yes:{job_id}")
+    builder.button(text="Отменить", callback_data=f"{RIGHTS_CALLBACK_PREFIX}:no:{job_id}")
+    builder.adjust(1, 1)
+    return builder.as_markup()
+
+
+async def _register_pending_job(state: FSMContext, job_id: str) -> None:
+    data = await state.get_data()
+    pending = data.get("pending_jobs", [])
+    if job_id not in pending:
+        pending.append(job_id)
+    await state.update_data(pending_jobs=pending)
+    await state.set_state(RightsStates.waiting_confirmation)
+
+
+async def _remove_pending_job(state: FSMContext, job_id: str) -> None:
+    data = await state.get_data()
+    pending = data.get("pending_jobs", [])
+    if job_id in pending:
+        pending.remove(job_id)
+    if pending:
+        await state.update_data(pending_jobs=pending)
+    else:
+        await state.clear()
 
 
 router = Router()
@@ -64,15 +101,14 @@ async def handle_upload(message: Message) -> None:
         (
             "Пришлите файл до "
             f"{settings.max_file_gb} ГБ и длительностью до {settings.max_duration_hours} часов. "
-            "После загрузки выберите нужную операцию."
-        ),
-        reply_markup=_build_operations_keyboard(),
+            "После загрузки подтвердите права и выберите нужную операцию."
+        )
     )
 
 
 @router.message(Command("link"))
 async def handle_link_hint(message: Message) -> None:
-    await message.answer("Пришлите прямую ссылку на файл. Я проверю заголовки и предложу опции.")
+    await message.answer("Пришлите прямую ссылку на файл. Я проверю заголовки и попрошу подтвердить права.")
 
 
 @router.message(Command("format"))
@@ -111,7 +147,7 @@ async def handle_cancel(message: Message) -> None:
 
 
 @router.message(F.text.startswith("http"))
-async def handle_url(message: Message) -> None:
+async def handle_url(message: Message, state: FSMContext) -> None:
     queue = _get_queue(message)
     settings = _get_settings(message)
     url = message.text.strip()
@@ -132,14 +168,12 @@ async def handle_url(message: Message) -> None:
         media_info=validation.meta,
     )
     await queue.enqueue(job)
-    await message.answer(
-        "Ссылка принята. Какую операцию выполнить?",
-        reply_markup=_build_operations_keyboard(),
-    )
+    await _register_pending_job(state, job.id)
+    await message.answer(RIGHTS_PROMPT_MESSAGE, reply_markup=_build_rights_keyboard(job.id))
 
 
 @router.message(F.document | F.video)
-async def handle_file(message: Message) -> None:
+async def handle_file(message: Message, state: FSMContext) -> None:
     queue = _get_queue(message)
     settings = _get_settings(message)
     file = message.document or message.video
@@ -160,10 +194,38 @@ async def handle_file(message: Message) -> None:
         mime_type=file.mime_type,
     )
     await queue.enqueue(job)
-    await message.answer(
-        "Файл сохранён. Выберите операцию:",
-        reply_markup=_build_operations_keyboard(),
-    )
+    await _register_pending_job(state, job.id)
+    await message.answer(RIGHTS_PROMPT_MESSAGE, reply_markup=_build_rights_keyboard(job.id))
+
+
+@router.callback_query(RightsStates.waiting_confirmation, F.data.startswith(f"{RIGHTS_CALLBACK_PREFIX}:"))
+async def handle_rights_confirmation(
+    callback: CallbackQuery,
+    state: FSMContext,
+    queue: JobQueue,
+) -> None:
+    if not callback.data:
+        await callback.answer()
+        return
+    _, decision, job_id = callback.data.split(":", maxsplit=2)
+
+    job = await queue.get_job(job_id)
+    if not job:
+        await callback.answer("Задача не найдена", show_alert=True)
+        await _remove_pending_job(state, job_id)
+        return
+
+    if decision == "yes":
+        job.params["rights_confirmed"] = True
+        await queue.update_job(job)
+        await _remove_pending_job(state, job_id)
+        await callback.message.answer(RIGHTS_CONFIRMED_MESSAGE, reply_markup=_build_operations_keyboard())
+        await callback.answer("Права подтверждены")
+    else:
+        await queue.delete_job(job_id)
+        await _remove_pending_job(state, job_id)
+        await callback.message.answer(RIGHTS_DECLINED_MESSAGE)
+        await callback.answer("Задача отменена")
 
 
 @router.callback_query(F.data.startswith("op:"))
@@ -182,9 +244,9 @@ async def handle_operation_choice(callback: CallbackQuery) -> None:
         return
 
     job = await queue.assign_latest_job(callback.from_user.id, job_type)
-    if not job:
-        await callback.answer("Нет активной загрузки", show_alert=True)
-        return
+    if not job:\n        await callback.answer("Сначала подтвердите права или загрузите файл", show_alert=True)\n        return\n\n    if not job.params.get("rights_confirmed"):\n        await callback.answer("Сначала подтвердите права", show_alert=True)\n        await queue.enqueue(job)\n        return\n
+    if job_type == JobType.REMUX and job.params.get("target_container") == "mp4" and job.mime_type and "opus" in (job.mime_type or "").lower():
+        await callback.message.answer(MP4_INCOMPATIBLE_MESSAGE)
 
     await callback.message.answer(
         f"Задача #{job.id[:6]} поставлена в очередь (операция: {job_type.value})."
@@ -196,3 +258,5 @@ def create_dispatcher(settings: Settings, queue: JobQueue) -> Dispatcher:
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     return dispatcher
+
+

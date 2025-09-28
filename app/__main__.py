@@ -1,7 +1,6 @@
 ﻿from __future__ import annotations
 
 import asyncio
-import logging
 from contextlib import suppress
 
 from aiogram import Bot
@@ -11,13 +10,11 @@ from .bot import create_dispatcher
 from .commands import setup_bot_commands
 from .config import load_settings
 from .jobs import JobQueue
+from \.logs import setup_logging\nfrom \.migrations import run_migrations
 
 
 async def _run_bot() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    setup_logging()
     settings = load_settings()
     if not settings.bot_token:
         raise RuntimeError("CLIPSAFE_BOT_TOKEN is not configured")
@@ -39,3 +36,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

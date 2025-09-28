@@ -52,6 +52,11 @@ class JobQueue:
             logger.warning("Draft job %s not found in storage", job_id)
             return None
 
+        if not job.params.get("rights_confirmed"):
+            await self._redis.rpush(draft_key, job.id)
+            logger.info("Job %s awaiting rights confirmation", job.id)
+            return None
+
         job.type = job_type
         job.touch(status=JobStatus.QUEUED)
         await self._save_job(job)
@@ -73,6 +78,19 @@ class JobQueue:
         job.touch(status=JobStatus.CANCELLED)
         await self._save_job(job)
         return job
+
+    async def delete_job(self, job_id: str) -> None:
+        job = await self.get_job(job_id)
+        if not job:
+            return
+        draft_key = USER_DRAFT_KEY.format(user_id=job.user_id)
+        await self._redis.lrem(draft_key, 0, job_id)
+        await self._redis.delete(_job_key(job_id))
+        logger.info("Deleted draft job %s for user %s", job_id, job.user_id)
+
+    async def update_job(self, job: Job) -> None:
+        job.touch()
+        await self._save_job(job)
 
     async def list_user_jobs(self, user_id: int, limit: int = 5) -> List[Job]:
         history_key = USER_HISTORY_KEY.format(user_id=user_id)
@@ -120,4 +138,6 @@ class JobQueue:
 
     async def _save_job(self, job: Job) -> None:
         await self._redis.set(_job_key(job.id), json.dumps(job.to_dict()))
+
+
 
