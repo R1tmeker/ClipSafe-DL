@@ -1,0 +1,28 @@
+﻿services:
+  bot:
+    build: .
+    command: python -m app
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    volumes:
+      - ./data:/app/data
+  worker:
+    build: .
+    command: python -m app.worker
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    volumes:
+      - ./data:/app/data
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+volumes:
+  redis-data:
